@@ -308,17 +308,17 @@ module Fluent::Plugin
     def send_request(uri, req)
       # Sign a request object and then start the HTTP connection
 
-      http = Net::HTTP.new(uri.host, 443)
+      #http = Net::HTTP.new(uri.host, 443)
       #http.options
-      http.use_ssl =true
-      http.set_debug_output $stdout
+      #http.use_ssl =true
+      #http.set_debug_output $stdout
       res = if @proxy_uri
               Net::HTTP.start(uri.host, uri.port, @proxy_uri.host, @proxy_uri.port, @proxy_uri.user, @proxy_uri.password, @http_opt) { |http|
                 http.request(req)
               }
             else
-              #Net::HTTP.start(uri.host, uri.port, @http_opt) { |http|
-              http.start() { |http|
+              Net::HTTP.start(uri.host, uri.port, @http_opt) { |http|
+                #http.start() { |http|
                 print req.body
                 http.request(req)
               }

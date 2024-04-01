@@ -390,6 +390,30 @@ class HTTPOutputTest < Test::Unit::TestCase
     end
   end
 
+
+  def test_aws_sigv4
+    d = create_driver(config + %[
+        <auth>
+          method aws_sigv4
+          aws_service osis
+          aws_region us-east-1
+          aws_role_arn arn:aws:iam::123456789012:role/MyRole
+        </auth>
+      ])
+    d.run(default_tag: 'test.http') do
+      test_events.each { |event|
+        d.feed(event)
+      }
+    end
+
+    result = @@result
+    assert_equal 'POST', result.method
+    assert_equal 'application/json', result.content_type
+    assert_equal test_events, result.data
+    assert_not_empty result.headers
+  end
+
+
   sub_test_case 'HTTPS' do
     def server_port
       19882
