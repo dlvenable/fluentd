@@ -20,6 +20,8 @@ require 'openssl'
 require 'fluent/tls'
 require 'fluent/plugin/output'
 require 'fluent/plugin_helper/socket'
+require 'aws-sigv4'
+require 'aws-sdk-core'
 
 # patch Net::HTTP to support extra_chain_cert which was added in Ruby feature #9758.
 # see: https://github.com/ruby/ruby/commit/31af0dafba6d3769d2a39617c0dddedb97883712
@@ -87,11 +89,17 @@ module Fluent::Plugin
 
     config_section :auth, required: false, multi: false do
       desc 'The method for HTTP authentication'
-      config_param :method, :enum, list: [:basic], default: :basic
+      config_param :method, :enum, list: [:basic, :aws_sigv4], default: :basic
       desc 'The username for basic authentication'
       config_param :username, :string, default: nil
       desc 'The password for basic authentication'
       config_param :password, :string, default: nil, secret: true
+      desc 'The AWS service to authenticate against'
+      config_param :aws_service, :string, default: nil
+      desc 'The AWS region to use when authenticating'
+      config_param :aws_region, :string, default: nil
+      desc 'The AWS role ARN to assume when authenticating'
+      config_param :aws_role_arn, :string, default: nil
     end
 
     def initialize
@@ -120,6 +128,23 @@ module Fluent::Plugin
           raise Fluent::ConfigError, "json_array option could be used with json formatter only"
         end
         define_singleton_method(:format, method(:format_json_array))
+      end
+
+      if @auth and @auth.method == :aws_sigv4
+        aws_sts_client = Aws::STS::Client.new(
+          region: @auth.aws_region
+        )
+
+        aws_credentials = Aws::AssumeRoleCredentials.new(
+          client: aws_sts_client,
+          role_arn: @auth.aws_role_arn,
+          role_session_name: "fluentd"
+        )
+        @aws_signer = Aws::Sigv4::Signer.new(
+          service: @auth.aws_service,
+          region: @auth.aws_region,
+          credentials_provider: aws_credentials
+        )
       end
     end
 
@@ -215,7 +240,7 @@ module Fluent::Plugin
       URI.parse(endpoint)
     end
 
-    def set_headers(req, chunk)
+    def set_headers(req, uri, chunk)
       if @headers
         @headers.each do |k, v|
           req[k] = v
@@ -227,6 +252,7 @@ module Fluent::Plugin
         end
       end
       req['Content-Type'] = @content_type
+      req['Host'] = uri.host
     end
 
     def create_request(chunk, uri)
@@ -236,21 +262,64 @@ module Fluent::Plugin
             when :put
               Net::HTTP::Put.new(uri.request_uri)
             end
-      if @auth
-        req.basic_auth(@auth.username, @auth.password)
-      end
-      set_headers(req, chunk)
+      set_headers(req, uri, chunk)
       req.body = @json_array ? "[#{chunk.read.chop}]" : chunk.read
+
+      print 'body size = ' + req.body.size.to_s + "\n"
+      #req.set_debug_output($stdout)
+      if @auth
+        if @auth.method == :basic
+          req.basic_auth(@auth.username, @auth.password)
+        elsif @auth.method == :aws_sigv4
+          # Perform AWS sigv4 signing on the req object
+          #@aws_signer
+
+          signature = @aws_signer.sign_request(
+            http_method: req.method,
+            url: uri.request_uri,
+            # Get all headers from req to sign
+            #headers: {'content-length' => req.body.size}.merge(req.to_hash),
+            #headers: req.to_hash.slice('content-type', 'host'),
+            headers: {
+              'Content-Type' => @content_type,
+              'Host' => uri.host
+            },
+            body: req.body
+          )
+          #req.add_field('host', signature.headers['host'])
+          req.add_field('x-amz-date', signature.headers['x-amz-date'])
+          req.add_field('x-amz-security-token', signature.headers['x-amz-security-token'])
+          req.add_field('x-amz-content-sha256', signature.headers['x-amz-content-sha256'])
+          req.add_field('authorization', signature.headers['authorization'])
+
+          # Log the signature.canonical_request
+
+          print "signature.canonical_request \n#{signature.canonical_request}\n"
+          print "DONE\n"
+          print "signature.string_to_sign \n#{signature.string_to_sign}\n"
+          print "DONE\n"
+          print "signature.content_sha256 \n#{signature.content_sha256}\n"
+          print "DONE\n"
+        end
+      end
       req
     end
 
     def send_request(uri, req)
+      # Sign a request object and then start the HTTP connection
+
+      http = Net::HTTP.new(uri.host, 443)
+      #http.options
+      http.use_ssl =true
+      http.set_debug_output $stdout
       res = if @proxy_uri
               Net::HTTP.start(uri.host, uri.port, @proxy_uri.host, @proxy_uri.port, @proxy_uri.user, @proxy_uri.password, @http_opt) { |http|
                 http.request(req)
               }
             else
-              Net::HTTP.start(uri.host, uri.port, @http_opt) { |http|
+              #Net::HTTP.start(uri.host, uri.port, @http_opt) { |http|
+              http.start() { |http|
+                print req.body
                 http.request(req)
               }
             end
