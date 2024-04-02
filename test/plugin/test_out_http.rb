@@ -7,6 +7,7 @@ require 'webrick/https'
 require 'net/http'
 require 'uri'
 require 'json'
+require 'aws-sdk-core'
 
 # WEBrick's ProcHandler doesn't handle PUT by default
 module WEBrick::HTTPServlet
@@ -392,6 +393,22 @@ class HTTPOutputTest < Test::Unit::TestCase
 
 
   def test_aws_sigv4
+    #stub.proxy(Aws::AssumeRoleCredentials).new do |credentials_provider|
+    fake_credentials = Aws::Credentials.new(
+      'fakeaccess',
+      'fakesecret',
+      'fake session token'
+    )
+    stub(Aws::AssumeRoleCredentials).new do |credentials_provider|
+      stub(credentials_provider).fetch_credentials {
+        fake_credentials
+      }
+      stub(credentials_provider).credentials {
+        fake_credentials
+      }
+      credentials_provider
+    end
+
     d = create_driver(config + %[
         <auth>
           method aws_sigv4
@@ -408,9 +425,19 @@ class HTTPOutputTest < Test::Unit::TestCase
 
     result = @@result
     assert_equal 'POST', result.method
-    assert_equal 'application/json', result.content_type
+    assert_equal 'application/x-ndjson', result.content_type
     assert_equal test_events, result.data
     assert_not_empty result.headers
+    assert_equal '127.0.0.1', result.headers['host']
+    assert_not_nil result.headers['authorization']
+    assert_match /AWS4-HMAC-SHA256 Credential=[a-zA-Z0-9]*\/\d+\/us-east-1\/osis\/aws4_request/, result.headers['authorization']
+    assert_match /SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token/, result.headers['authorization']
+    assert_not_nil result.headers['x-amz-content-sha256']
+    assert_not_empty result.headers['x-amz-content-sha256']
+    assert_not_nil result.headers['x-amz-security-token']
+    assert_not_empty result.headers['x-amz-security-token']
+    assert_not_nil result.headers['x-amz-date']
+    assert_not_empty result.headers['x-amz-date']
   end
 
 
