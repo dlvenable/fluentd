@@ -392,54 +392,97 @@ class HTTPOutputTest < Test::Unit::TestCase
   end
 
 
-  def test_aws_sigv4
-    #stub.proxy(Aws::AssumeRoleCredentials).new do |credentials_provider|
-    fake_credentials = Aws::Credentials.new(
-      'fakeaccess',
-      'fakesecret',
-      'fake session token'
-    )
-    stub(Aws::AssumeRoleCredentials).new do |credentials_provider|
-      stub(credentials_provider).fetch_credentials {
-        fake_credentials
-      }
-      stub(credentials_provider).credentials {
-        fake_credentials
-      }
-      credentials_provider
+  sub_test_case 'aws sigv4 auth' do
+    setup do
+      @@fake_aws_credentials = Aws::Credentials.new(
+        'fakeaccess',
+        'fakesecret',
+        'fake session token'
+      )
     end
 
-    d = create_driver(config + %[
-        <auth>
-          method aws_sigv4
-          aws_service osis
-          aws_region us-east-1
-          aws_role_arn arn:aws:iam::123456789012:role/MyRole
-        </auth>
-      ])
-    d.run(default_tag: 'test.http') do
-      test_events.each { |event|
-        d.feed(event)
-      }
+    def server_port
+      19883
     end
 
-    result = @@result
-    assert_equal 'POST', result.method
-    assert_equal 'application/x-ndjson', result.content_type
-    assert_equal test_events, result.data
-    assert_not_empty result.headers
-    assert_equal '127.0.0.1', result.headers['host']
-    assert_not_nil result.headers['authorization']
-    assert_match /AWS4-HMAC-SHA256 Credential=[a-zA-Z0-9]*\/\d+\/us-east-1\/osis\/aws4_request/, result.headers['authorization']
-    assert_match /SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token/, result.headers['authorization']
-    assert_not_nil result.headers['x-amz-content-sha256']
-    assert_not_empty result.headers['x-amz-content-sha256']
-    assert_not_nil result.headers['x-amz-security-token']
-    assert_not_empty result.headers['x-amz-security-token']
-    assert_not_nil result.headers['x-amz-date']
-    assert_not_empty result.headers['x-amz-date']
+    def test_aws_sigv4_sts_role_arn
+      stub(Aws::AssumeRoleCredentials).new do |credentials_provider|
+        stub(credentials_provider).credentials {
+          @@fake_aws_credentials
+        }
+        credentials_provider
+      end
+
+      d = create_driver(config + %[
+          <auth>
+            method aws_sigv4
+            aws_service someservice
+            aws_region my-region-1
+            aws_role_arn arn:aws:iam::123456789012:role/MyRole
+          </auth>
+        ])
+      d.run(default_tag: 'test.http') do
+        test_events.each { |event|
+          d.feed(event)
+        }
+      end
+
+      result = @@result
+      assert_equal 'POST', result.method
+      assert_equal 'application/x-ndjson', result.content_type
+      assert_equal test_events, result.data
+      assert_not_empty result.headers
+      assert_equal '127.0.0.1', result.headers['host']
+      assert_not_nil result.headers['authorization']
+      assert_match /AWS4-HMAC-SHA256 Credential=[a-zA-Z0-9]*\/\d+\/my-region-1\/someservice\/aws4_request/, result.headers['authorization']
+      assert_match /SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token/, result.headers['authorization']
+      assert_equal @@fake_aws_credentials.session_token, result.headers['x-amz-security-token']
+      assert_not_nil result.headers['x-amz-content-sha256']
+      assert_not_empty result.headers['x-amz-content-sha256']
+      assert_not_nil result.headers['x-amz-security-token']
+      assert_not_empty result.headers['x-amz-security-token']
+      assert_not_nil result.headers['x-amz-date']
+      assert_not_empty result.headers['x-amz-date']
+    end
+
+    def test_aws_sigv4_no_role
+      stub(Aws::CredentialProviderChain).new do |provider_chain|
+        stub(provider_chain).resolve {
+          @@fake_aws_credentials
+        }
+        provider_chain
+      end
+      d = create_driver(config + %[
+          <auth>
+            method aws_sigv4
+            aws_service someservice
+            aws_region my-region-1
+          </auth>
+        ])
+      d.run(default_tag: 'test.http') do
+        test_events.each { |event|
+          d.feed(event)
+        }
+      end
+
+      result = @@result
+      assert_equal 'POST', result.method
+      assert_equal 'application/x-ndjson', result.content_type
+      assert_equal test_events, result.data
+      assert_not_empty result.headers
+      assert_equal '127.0.0.1', result.headers['host']
+      assert_not_nil result.headers['authorization']
+      assert_match /AWS4-HMAC-SHA256 Credential=[a-zA-Z0-9]*\/\d+\/my-region-1\/someservice\/aws4_request/, result.headers['authorization']
+      assert_match /SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token/, result.headers['authorization']
+      assert_equal @@fake_aws_credentials.session_token, result.headers['x-amz-security-token']
+      assert_not_nil result.headers['x-amz-content-sha256']
+      assert_not_empty result.headers['x-amz-content-sha256']
+      assert_not_nil result.headers['x-amz-security-token']
+      assert_not_empty result.headers['x-amz-security-token']
+      assert_not_nil result.headers['x-amz-date']
+      assert_not_empty result.headers['x-amz-date']
+    end
   end
-
 
   sub_test_case 'HTTPS' do
     def server_port

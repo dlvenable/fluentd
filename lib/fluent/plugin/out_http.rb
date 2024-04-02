@@ -131,15 +131,18 @@ module Fluent::Plugin
       end
 
       if @auth and @auth.method == :aws_sigv4
-        aws_sts_client = Aws::STS::Client.new(
-          region: @auth.aws_region
-        )
+        if @auth.aws_role_arn == nil
+          aws_credentials = Aws::CredentialProviderChain.new.resolve
+        else
+          aws_credentials = Aws::AssumeRoleCredentials.new(
+            client: Aws::STS::Client.new(
+              region: @auth.aws_region
+            ),
+            role_arn: @auth.aws_role_arn,
+            role_session_name: "fluentd"
+          )
+        end
 
-        aws_credentials = Aws::AssumeRoleCredentials.new(
-          client: aws_sts_client,
-          role_arn: @auth.aws_role_arn,
-          role_session_name: "fluentd"
-        )
         @aws_signer = Aws::Sigv4::Signer.new(
           service: @auth.aws_service,
           region: @auth.aws_region,
@@ -269,35 +272,19 @@ module Fluent::Plugin
         if @auth.method == :basic
           req.basic_auth(@auth.username, @auth.password)
         elsif @auth.method == :aws_sigv4
-          # Perform AWS sigv4 signing on the req object
-          #@aws_signer
-
           signature = @aws_signer.sign_request(
             http_method: req.method,
             url: uri.request_uri,
-            # Get all headers from req to sign
-            #headers: {'content-length' => req.body.size}.merge(req.to_hash),
-            #headers: req.to_hash.slice('content-type', 'host'),
             headers: {
               'Content-Type' => @content_type,
               'Host' => uri.host
             },
             body: req.body
           )
-          #req.add_field('host', signature.headers['host'])
           req.add_field('x-amz-date', signature.headers['x-amz-date'])
           req.add_field('x-amz-security-token', signature.headers['x-amz-security-token'])
           req.add_field('x-amz-content-sha256', signature.headers['x-amz-content-sha256'])
           req.add_field('authorization', signature.headers['authorization'])
-
-          # Log the signature.canonical_request
-
-          print "signature.canonical_request \n#{signature.canonical_request}\n"
-          print "DONE\n"
-          print "signature.string_to_sign \n#{signature.string_to_sign}\n"
-          print "DONE\n"
-          print "signature.content_sha256 \n#{signature.content_sha256}\n"
-          print "DONE\n"
         end
       end
       req
